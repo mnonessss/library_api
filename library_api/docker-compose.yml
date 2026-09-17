@@ -1,20 +1,50 @@
 version: '3.8'
 services:
-  db:
-    image: postgres:15-alpine
+  postgres-primary:
+    build:
+      context: ./docker/postgres
+    image: library-api-postgres-pgcron:15.9.0
     environment:
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRESQL_USERNAME: ${DB_USER}
+      POSTGRESQL_PASSWORD: ${DB_PASSWORD}
+      POSTGRESQL_DATABASE: ${DB_NAME}
+      POSTGRESQL_REPLICATION_MODE: master
+      POSTGRESQL_REPLICATION_USER: ${DB_USER}
+      POSTGRESQL_REPLICATION_PASSWORD: ${DB_PASSWORD}
+      POSTGRESQL_PRIMARY_PASSWORD: ${DB_PASSWORD}
     ports:
       - "${DB_PORT}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - primary_data:/bitnami/postgresql 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    
+  postgres-replica:
+    image: bitnamilegacy/postgresql:15.9.0
+    environment:
+      POSTGRESQL_USERNAME: ${DB_USER}
+      POSTGRESQL_PASSWORD: ${DB_PASSWORD}
+      POSTGRESQL_DATABASE: ${DB_NAME}
+      POSTGRESQL_MASTER_HOST: postgres-primary
+      POSTGRESQL_MASTER_PORT_NUMBER: 5432
+      POSTGRESQL_REPLICATION_MODE: slave
+      POSTGRESQL_REPLICATION_USER: ${DB_USER}
+      POSTGRESQL_REPLICATION_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "${DB_REPLICA_PORT}:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    volumes:
+      - replica_data:/bitnami/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   backend:
     build: .
@@ -23,13 +53,85 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:5432/${DB_NAME}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres-primary:5432/${DB_NAME}
+      DATABASE_REPLICA_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres-replica:5432/${DB_NAME}
+      DB_HOST: postgres-primary
+      DB_REPLICA_HOST: postgres-replica
+      DB_REPLICA_PORT: 5432
+      SHARD_DATABASE_URLS: postgresql://${DB_USER}:${DB_PASSWORD}@postgres-shard-0:5432/${DB_NAME},postgresql://${DB_USER}:${DB_PASSWORD}@postgres-shard-1:5432/${DB_NAME},postgresql://${DB_USER}:${DB_PASSWORD}@postgres-shard-2:5432/${DB_NAME}
+      SHARD_STRATEGY: modulo
+      SHARD_VIRTUAL_NODES: 128
+    volumes:
+      - .:/app
+    entrypoint: ["/bin/sh", "/app/entrypoint.sh"]
     depends_on:
-      db:
+      postgres-primary:
+        condition: service_healthy
+      postgres-replica:
+        condition: service_healthy
+      postgres-shard-0:
+        condition: service_healthy
+      postgres-shard-1:
+        condition: service_healthy
+      postgres-shard-2:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
+  postgres-shard-0:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5470:5432"
+    volumes:
+      - shard0_data:/var/lib/postgresql/data
+      - ./docker/shards/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-shard-1:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5471:5432"
+    volumes:
+      - shard1_data:/var/lib/postgresql/data
+      - ./docker/shards/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-shard-2:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5472:5432"
+    volumes:
+      - shard2_data:/var/lib/postgresql/data
+      - ./docker/shards/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 
 volumes:
-  postgres_data:
-  pgadmin_data:
+  primary_data:
+  replica_data:
+  shard0_data:
+  shard1_data:
+  shard2_data:

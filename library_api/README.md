@@ -60,14 +60,33 @@ docker compose up -d --build
 
 | Индекс | Колонки | Зачем нужен |
 |--------|---------|-------------|
-| `bookings_pkey` / `ix_bookings_id` | `id` | Поиск бронирования по первичному ключу |
+| `bookings_partitioned_pkey` | `(id, created_at)` | PK партиционированной таблицы (ключ обязан включать `created_at`) |
+| `ix_bookings_id` | `id` | Поиск бронирования по id (без pruning, обход партиций) |
 | `ix_bookings_user_id` | `user_id` | История бронирований читателя |
 | `ix_bookings_book_id` | `book_id` | Кто бронировал конкретную книгу |
 | `ix_bookings_status` | `status` | Фильтрация по статусу (низкая селективность) |
 | `ix_bookings_created_at` | `created_at` | Диапазоны дат и сортировка |
 | `idx_bookings_status_created_at` | `(status, created_at)` | Список бронирований с фильтром по статусу и дате |
+| `idx_bookings_user_created` | `(user_id, created_at DESC)` | История читателя с сортировкой |
 
-Составной индекс `idx_bookings_status_created_at` добавлен миграцией `c3d4e5f6a7b8` и используется запросом `GET /api/bookings?status=...&from_date=...`. Обе колонки входят в условие индекса, поэтому PostgreSQL не применяет `status` как пост-фильтр после сканирования по дате.
+`bookings` партиционирована по `RANGE (created_at)` помесячно (миграция `d4e5f6a7b8c9`). Запросы с фильтром по дате используют partition pruning.
+
+Составной индекс `idx_bookings_status_created_at` добавлен миграцией `c3d4e5f6a7b8` и используется запросом `GET /api/bookings?status=...&from_date=...`.
+
+## Партиции и алерты
+
+Ночные job'ы крутит **pg_cron** на Primary (`0 1 * * *` создание, `5 1 * * *` health):
+
+```sql
+SELECT jobid, jobname, schedule, command FROM cron.job;
+SELECT maintain_partitions();
+SELECT * FROM check_partition_health();
+SELECT * FROM partition_alert_log ORDER BY created_at DESC;
+```
+
+Ручной вызов из backend (та же SQL-функция): `POST /admin/partitions/create`, `POST /admin/partitions/health`. Демо сбоя: `POST /admin/partitions/demo/break` и `/demo/restore`.
+
+Алерты от pg_cron пишутся в `partition_alert_log`. Повтор CRITICAL не отправляется. Переход CRITICAL → OK даёт recovery.
 
 ## Сложные запросы
 

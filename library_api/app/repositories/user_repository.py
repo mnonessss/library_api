@@ -14,17 +14,30 @@ class UserRepository:
             self.db.execute(query, {'limit': limit, 'skip': skip}).fetchall()
             )
 
+    def count(self) -> int:
+        value = self.db.execute(text('SELECT COUNT(*) FROM users')).scalar()
+        return int(value or 0)
+
     def get_by_id(self, user_id: int):
         query = text('SELECT id, name, \
                      email, created_at FROM users WHERE id = :user_id')
         return self.db.execute(query, {'user_id': user_id}).fetchone()
 
-    def create(self, name: str, email: str):
-        query = text("""
-            INSERT INTO users (name, email) VALUES (:name, :email)
-            RETURNING id, name, email, created_at
-        """)
-        result = self.db.execute(query, {'name': name, 'email': email})
+    def create(self, name: str, email: str, user_id: int | None = None):
+        if user_id is None:
+            query = text("""
+                INSERT INTO users (name, email) VALUES (:name, :email)
+                RETURNING id, name, email, created_at
+            """)
+            params = {'name': name, 'email': email}
+        else:
+            query = text("""
+                INSERT INTO users (id, name, email)
+                VALUES (:id, :name, :email)
+                RETURNING id, name, email, created_at
+            """)
+            params = {'id': user_id, 'name': name, 'email': email}
+        result = self.db.execute(query, params)
         self.db.commit()
         return result.fetchone()
 

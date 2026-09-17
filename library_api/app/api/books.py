@@ -1,4 +1,4 @@
-from app.database import get_db
+from app.database import get_db, get_db_replica
 from app.schemas.book import (
     BookCreate,
     BookResponse,
@@ -23,18 +23,19 @@ router = APIRouter(prefix='/api/books', tags=['books'])
 @router.get('/popular', response_model=list[PopularBookResponse])
 def get_popular_books(
     limit: int = Query(5, ge=1, le=50),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_replica),
 ):
     service = BookService(db)
     return service.get_top_popular_books(limit)
 
 
+# Каталог книг — только чтение, поэтому сессия Replica (get_db_replica).
 @router.get('/', response_model=list[BookResponse | BookWithCategoryResponse])
 def get_books(
     skip: int = 0,
     limit: int = 20,
     search: str | None = Query(None, description='Поиск по названию книги'),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_replica),
 ):
     service = BookService(db)
     if search is not None:
@@ -43,7 +44,7 @@ def get_books(
 
 
 @router.get('/{book_id}', response_model=BookResponse)
-def get_book(book_id: int, db: Session = Depends(get_db)):
+def get_book(book_id: int, db: Session = Depends(get_db_replica)):
     service = BookService(db)
     book = service.get_book(book_id)
 
